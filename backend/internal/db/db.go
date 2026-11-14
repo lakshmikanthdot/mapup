@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"mapup/backend/internal/models"
@@ -71,6 +72,9 @@ func (s *Store) CurrentLocation(ctx context.Context, vehicleID string) (*models.
 	if err != nil { return nil, err }; return &models.LocationUpdate{Latitude:lat,Longitude:lng},nil
 }
 
+// GeofencesContaining returns every geofence whose boundary covers the point.
+// ST_Covers is inclusive: a point exactly on a geofence edge is treated as
+// inside. This is the documented boundary policy for the system.
 func (s *Store) GeofencesContaining(ctx context.Context, location models.LocationUpdate) ([]models.Geofence, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT id,name,category,created_at FROM geofences WHERE ST_Covers(boundary,ST_SetSRID(ST_MakePoint($1,$2),4326))`, location.Longitude, location.Latitude)
 	if err != nil { return nil,err }; defer rows.Close(); result:=[]models.Geofence{}
@@ -83,8 +87,45 @@ func (s *Store) CreateAlert(ctx context.Context, a models.Alert) (models.Alert,e
 }
 
 func (s *Store) ListAlerts(ctx context.Context, limit int) ([]models.Alert,error) {
-	rows,err:=s.Pool.Query(ctx,`SELECT id,vehicle_id,geofence_id,event_type,message,created_at FROM alerts ORDER BY created_at DESC LIMIT $1`,limit);if err!=nil{return nil,err};defer rows.Close();result:=[]models.Alert{}
-	for rows.Next(){var a models.Alert;if err:=rows.Scan(&a.ID,&a.VehicleID,&a.GeofenceID,&a.EventType,&a.Message,&a.CreatedAt);err!=nil{return nil,err};result=append(result,a)};return result,rows.Err()
+	return s.ListAlertsFiltered(ctx, models.AlertFilter{}, limit)
+}
+
+func (s *Store) ListAlertsFiltered(ctx context.Context, f models.AlertFilter, limit int) ([]models.Alert,error) {
+	query := `SELECT id,vehicle_id,geofence_id,event_type,message,created_at FROM alerts WHERE 1=1`
+	args := []interface{}{}
+	add := func(s string) {
+		args = append(args, s)
+	}
+	if f.VehicleID != "" {
+		query += " AND vehicle_id=$" + fmt.Sprintf("%d", len(args)+1)
+		add(f.VehicleID)
+	}
+	if f.GeofenceID != "" {
+		query += " AND geofence_id=$" + fmt.Sprintf("%d", len(args)+1)
+		add(f.GeofenceID)
+	}
+	if f.EventType != "" {
+		query += " AND event_type=$" + fmt.Sprintf("%d", len(args)+1)
+		add(f.EventType)
+	}
+	if !f.Since.IsZero() {
+		query += " AND created_at>=$" + fmt.Sprintf("%d", len(args)+1)
+		add(f.Since.Format(time.RFC3339))
+	}
+	query += " ORDER BY created_at DESC LIMIT $"+fmt.Sprintf("%d", len(args)+1)
+	add(fmt.Sprintf("%d", limit))
+	rows, err := s.Pool.Query(ctx, query, args...)
+	if err != nil { return nil, err }
+	defer rows.Close()
+	result := []models.Alert{}
+	for rows.Next() {
+		var a models.Alert
+		if err := rows.Scan(&a.ID, &a.VehicleID, &a.GeofenceID, &a.EventType, &a.Message, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, a)
+	}
+	return result, rows.Err()
 }
 
 func (s *Store) MatchingRules(ctx context.Context, vehicleID, geofenceID, eventType string) ([]models.AlertRule,error) {

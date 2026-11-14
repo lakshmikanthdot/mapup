@@ -44,3 +44,12 @@ type Alert struct {
 	Message    string    `json:"message"`
 	CreatedAt  time.Time `json:"created_at"`
 }
+
+// AlertFilter lets callers narrow the alert history by vehicle, geofence,
+// event type and an optional time window. Empty fields are ignored.
+type AlertFilter struct {
+	VehicleID  string
+	GeofenceID string
+	EventType  string
+	Since      time.Time
+}
