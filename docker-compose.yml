@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: mapup
+      POSTGRES_PASSWORD: mapup
+      POSTGRES_DB: mapup
+    ports: ["5433:5432"]
+    volumes: [mapup-data:/var/lib/postgresql/data, ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro]
+    healthcheck: {test: ["CMD-SHELL","pg_isready -U mapup -d mapup"], interval: 5s, timeout: 5s, retries: 10}
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgres://mapup:mapup@db:5432/mapup?sslmode=disable
+      ALLOWED_ORIGIN: http://localhost:5173
+    ports: ["8080:8080"]
+    depends_on: {db: {condition: service_healthy}}
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:8080
+    ports: ["5173:80"]
+    depends_on: [api]
+volumes:
+  mapup-data:
